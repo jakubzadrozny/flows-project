@@ -1,18 +1,25 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torchvision import utils as vutils
+
+import pytorch_lightning as pl
 
 
-class VAE(nn.Module):
+class VAE(pl.LightningModule):
 
-    def __init__(self, in_channels, latent_dim, hidden_dims):
+    def __init__(self, in_channels=3, latent_dim=128, hidden_dims=None, lr=1e-3, kl_weight=1e-3):
         super().__init__()
 
         self.latent_dim = latent_dim
+        self.lr = lr
+        self.kl_weight = kl_weight
 
         modules = []
         if hidden_dims is None:
             hidden_dims = [32, 64, 128, 256, 512]
+
+        self.save_hyperparameters('in_channels', 'latent_dim', 'hidden_dims', 'lr', 'kl_weight')
 
         # Build Encoder
         for h_dim in hidden_dims:
@@ -126,21 +133,19 @@ class VAE(nn.Module):
 
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
 
-        loss = recons_loss + 0.001 * kld_loss
+        loss = recons_loss + self.kl_weight * kld_loss
         return {'loss': loss, 'rec_loss': recons_loss, 'kl': kld_loss}
 
-    def sample(self, num_samples, device):
+    def sample(self, num_samples):
         """
         Samples from the latent space and return the corresponding
         image space map.
         :param num_samples: (Int) Number of samples
-        :param current_device: (Int) Device to run the model
         :return: (Tensor)
         """
         z = torch.randn(num_samples,
-                        self.latent_dim)
-
-        z = z.to(device)
+                        self.latent_dim,
+                        device=self.device)
 
         samples = self.decode(z)
         return samples
@@ -153,3 +158,46 @@ class VAE(nn.Module):
         """
 
         return self.forward(x)[0]
+
+
+    def training_step(self, batch, batch_idx):
+        x = batch[0]
+        rec, mu, log_var = self(x)
+        losses = self.loss_function(x, rec, mu, log_var)
+
+        self.log('train_loss', losses['loss'])
+        self.log('train_rec_loss', losses['rec_loss'])
+        self.log('train_kl', losses['kl'])
+
+        return losses['loss']
+
+
+    def validation_step(self, batch, batch_idx):
+        x = batch[0]
+        rec, mu, log_var = self(x)
+        losses = self.loss_function(x, rec, mu, log_var)
+
+        self.log('val_loss', losses['loss'])
+        self.log('val_rec_loss', losses['rec_loss'])
+        self.log('val_kl', losses['kl'])
+
+        if batch_idx == 0:
+            vutils.save_image(rec.detach().cpu(),
+                              f"{self.logger.save_dir}/{self.logger.name}/version_{self.logger.version}/"
+                              f"media/{self.logger.name}_{self.current_epoch}_rec.png",
+                              nrow=8)
+
+        return losses['loss']
+
+
+    def validation_epoch_end(self, outputs):
+        samples = self.sample(64)
+        vutils.save_image(samples.detach().cpu(),
+                          f"{self.logger.save_dir}/{self.logger.name}/version_{self.logger.version}/"
+                          f"media/{self.logger.name}_{self.current_epoch}_samples.png",
+                          nrow=8)
+
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer

@@ -1,14 +1,18 @@
 """Utility classes for real NVP.
 """
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+from torchvision import utils as vutils
+
+import pytorch_lightning as pl
+
+from .data_utils import logit_transform
 
 class Hyperparameters():
-    def __init__(self, base_dim=64, res_blocks=8, bottleneck=False, skip=True, 
-                 weight_norm=True, coupling_bn=True, affine=True):
+    def __init__(self, base_dim=64, res_blocks=8, bottleneck=False, skip=True,
+                 weight_norm=True, coupling_bn=True, affine=True, scale_reg=5e-5):
         self.base_dim = base_dim
         self.res_blocks = res_blocks
         self.bottleneck = bottleneck
@@ -16,9 +20,10 @@ class Hyperparameters():
         self.weight_norm = weight_norm
         self.coupling_bn = coupling_bn
         self.affine = affine
+        self.scale_reg = scale_reg
 
 class WeightNormConv2d(nn.Module):
-    def __init__(self, in_dim, out_dim, kernel_size, stride=1, padding=0, 
+    def __init__(self, in_dim, out_dim, kernel_size, stride=1, padding=0,
         bias=True, weight_norm=True, scale=False):
         """Intializes a Conv2d augmented with weight normalization.
 
@@ -38,13 +43,13 @@ class WeightNormConv2d(nn.Module):
 
         if weight_norm:
             self.conv = nn.utils.weight_norm(
-                nn.Conv2d(in_dim, out_dim, kernel_size, 
+                nn.Conv2d(in_dim, out_dim, kernel_size,
                     stride=stride, padding=padding, bias=bias))
             if not scale:
                 self.conv.weight_g.data = torch.ones_like(self.conv.weight_g.data)
                 self.conv.weight_g.requires_grad = False    # freeze scaling
         else:
-            self.conv = nn.Conv2d(in_dim, out_dim, kernel_size, 
+            self.conv = nn.Conv2d(in_dim, out_dim, kernel_size,
                 stride=stride, padding=padding, bias=bias)
 
     def forward(self, x):
@@ -67,29 +72,29 @@ class ResidualBlock(nn.Module):
             weight_norm: True if apply weight normalization, False otherwise.
         """
         super(ResidualBlock, self).__init__()
-        
+
         self.in_block = nn.Sequential(
             nn.BatchNorm2d(dim),
             nn.ReLU())
         if bottleneck:
             self.res_block = nn.Sequential(
-                WeightNormConv2d(dim, dim, (1, 1), stride=1, padding=0, 
+                WeightNormConv2d(dim, dim, (1, 1), stride=1, padding=0,
                     bias=False, weight_norm=weight_norm, scale=False),
                 nn.BatchNorm2d(dim),
                 nn.ReLU(),
-                WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1, 
+                WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1,
                     bias=False, weight_norm=weight_norm, scale=False),
                 nn.BatchNorm2d(dim),
                 nn.ReLU(),
-                WeightNormConv2d(dim, dim, (1, 1), stride=1, padding=0, 
+                WeightNormConv2d(dim, dim, (1, 1), stride=1, padding=0,
                     bias=True, weight_norm=weight_norm, scale=True))
         else:
             self.res_block = nn.Sequential(
-                WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1, 
+                WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1,
                     bias=False, weight_norm=weight_norm, scale=False),
                 nn.BatchNorm2d(dim),
                 nn.ReLU(),
-                WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1, 
+                WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1,
                     bias=True, weight_norm=weight_norm, scale=True))
 
     def forward(self, x):
@@ -103,7 +108,7 @@ class ResidualBlock(nn.Module):
         return x + self.res_block(self.in_block(x))
 
 class ResidualModule(nn.Module):
-    def __init__(self, in_dim, dim, out_dim, 
+    def __init__(self, in_dim, dim, out_dim,
         res_blocks, bottleneck, skip, weight_norm):
         """Initializes a ResidualModule.
 
@@ -119,47 +124,47 @@ class ResidualModule(nn.Module):
         super(ResidualModule, self).__init__()
         self.res_blocks = res_blocks
         self.skip = skip
-        
+
         if res_blocks > 0:
-            self.in_block = WeightNormConv2d(in_dim, dim, (3, 3), stride=1, 
+            self.in_block = WeightNormConv2d(in_dim, dim, (3, 3), stride=1,
                 padding=1, bias=True, weight_norm=weight_norm, scale=False)
             self.core_block = nn.ModuleList(
-                [ResidualBlock(dim, bottleneck, weight_norm) 
+                [ResidualBlock(dim, bottleneck, weight_norm)
                 for _ in range(res_blocks)])
             self.out_block = nn.Sequential(
                 nn.BatchNorm2d(dim),
                 nn.ReLU(),
-                WeightNormConv2d(dim, out_dim, (1, 1), stride=1, padding=0, 
+                WeightNormConv2d(dim, out_dim, (1, 1), stride=1, padding=0,
                     bias=True, weight_norm=weight_norm, scale=True))
-        
+
             if skip:
-                self.in_skip = WeightNormConv2d(dim, dim, (1, 1), stride=1, 
+                self.in_skip = WeightNormConv2d(dim, dim, (1, 1), stride=1,
                     padding=0, bias=True, weight_norm=weight_norm, scale=True)
                 self.core_skips = nn.ModuleList(
                     [WeightNormConv2d(
-                        dim, dim, (1, 1), stride=1, padding=0, bias=True, 
-                        weight_norm=weight_norm, scale=True) 
+                        dim, dim, (1, 1), stride=1, padding=0, bias=True,
+                        weight_norm=weight_norm, scale=True)
                     for _ in range(res_blocks)])
         else:
             if bottleneck:
                 self.block = nn.Sequential(
-                    WeightNormConv2d(in_dim, dim, (1, 1), stride=1, padding=0, 
+                    WeightNormConv2d(in_dim, dim, (1, 1), stride=1, padding=0,
                         bias=False, weight_norm=weight_norm, scale=False),
                     nn.BatchNorm2d(dim),
                     nn.ReLU(),
-                    WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1, 
+                    WeightNormConv2d(dim, dim, (3, 3), stride=1, padding=1,
                         bias=False, weight_norm=weight_norm, scale=False),
                     nn.BatchNorm2d(dim),
                     nn.ReLU(),
-                    WeightNormConv2d(dim, out_dim, (1, 1), stride=1, padding=0, 
+                    WeightNormConv2d(dim, out_dim, (1, 1), stride=1, padding=0,
                         bias=True, weight_norm=weight_norm, scale=True))
             else:
                 self.block = nn.Sequential(
-                    WeightNormConv2d(in_dim, dim, (3, 3), stride=1, padding=1, 
+                    WeightNormConv2d(in_dim, dim, (3, 3), stride=1, padding=1,
                         bias=False, weight_norm=weight_norm, scale=False),
                     nn.BatchNorm2d(dim),
                     nn.ReLU(),
-                    WeightNormConv2d(dim, out_dim, (3, 3), stride=1, padding=1, 
+                    WeightNormConv2d(dim, out_dim, (3, 3), stride=1, padding=1,
                         bias=True, weight_norm=weight_norm, scale=True))
 
     def forward(self, x):
@@ -243,13 +248,12 @@ class CheckerboardAdditiveCoupling(AbstractCoupling):
             hps: the set of hyperparameters.
         """
         super(CheckerboardAdditiveCoupling, self).__init__(mask_config, hps)
-        
-#         self.mask = self.build_mask(size, config=mask_config).cuda()
-        self.mask = self.build_mask(size, config=mask_config)
+
+        self.register_buffer("mask", build_mask(size, config=mask_config))
         self.in_bn = nn.BatchNorm2d(in_out_dim)
         self.block = nn.Sequential(
             nn.ReLU(),
-            ResidualModule(2*in_out_dim+1, mid_dim, in_out_dim, 
+            ResidualModule(2*in_out_dim+1, mid_dim, in_out_dim,
                 self.res_blocks, self.bottleneck, self.skip, self.weight_norm))
         self.out_bn = nn.BatchNorm2d(in_out_dim, affine=False)
 
@@ -304,14 +308,13 @@ class CheckerboardAffineCoupling(AbstractCoupling):
         """
         super(CheckerboardAffineCoupling, self).__init__(mask_config, hps)
 
-#         self.mask = self.build_mask(size, config=mask_config).cuda()
-        self.mask = self.build_mask(size, config=mask_config)
+        self.register_buffer("mask", self.build_mask(size, config=mask_config))
         self.scale = nn.Parameter(torch.zeros(1), requires_grad=True)
         self.scale_shift = nn.Parameter(torch.zeros(1), requires_grad=True)
         self.in_bn = nn.BatchNorm2d(in_out_dim)
         self.block = nn.Sequential(        # 1st half of resnet: shift
             nn.ReLU(),                    # 2nd half of resnet: log_rescale
-            ResidualModule(2*in_out_dim+1, mid_dim, 2*in_out_dim, 
+            ResidualModule(2*in_out_dim+1, mid_dim, 2*in_out_dim,
                 self.res_blocks, self.bottleneck, self.skip, self.weight_norm))
         self.out_bn = nn.BatchNorm2d(in_out_dim, affine=False)
 
@@ -333,8 +336,8 @@ class CheckerboardAffineCoupling(AbstractCoupling):
         log_rescale = self.scale * torch.tanh(log_rescale) + self.scale_shift
         shift = shift * (1. - mask)
         log_rescale = log_rescale * (1. - mask)
-        
-        log_diag_J = log_rescale     # See Eq(6) in real NVP 
+
+        log_diag_J = log_rescale     # See Eq(6) in real NVP
         # See Eq(7) and Eq(8) and Section 3.7 in real NVP
         if reverse:
             if self.coupling_bn:
@@ -402,7 +405,7 @@ class ChannelwiseAdditiveCoupling(AbstractCoupling):
         self.in_bn = nn.BatchNorm2d(in_out_dim//2)
         self.block = nn.Sequential(
             nn.ReLU(),
-            ResidualModule(in_out_dim, mid_dim, in_out_dim//2, 
+            ResidualModule(in_out_dim, mid_dim, in_out_dim//2,
                 self.res_blocks, self.bottleneck, self.skip, self.weight_norm))
         self.out_bn = nn.BatchNorm2d(in_out_dim//2, affine=False)
 
@@ -423,7 +426,7 @@ class ChannelwiseAdditiveCoupling(AbstractCoupling):
         off_ = self.in_bn(off)
         off_ = torch.cat((off_, -off_), dim=1)    # C channels
         shift = self.block(off_)
-        
+
         log_diag_J = torch.zeros_like(x)    # unit Jacobian determinant
         # See Eq(3) and Eq(4) in NICE and Section 3.7 in real NVP
         if reverse:
@@ -466,7 +469,7 @@ class ChannelwiseAffineCoupling(AbstractCoupling):
         self.in_bn = nn.BatchNorm2d(in_out_dim//2)
         self.block = nn.Sequential(        # 1st half of resnet: shift
             nn.ReLU(),                    # 2nd half of resnet: log_rescale
-            ResidualModule(in_out_dim, mid_dim, in_out_dim, 
+            ResidualModule(in_out_dim, mid_dim, in_out_dim,
                 self.res_blocks, self.bottleneck, self.skip, self.weight_norm))
         self.out_bn = nn.BatchNorm2d(in_out_dim//2, affine=False)
 
@@ -489,7 +492,7 @@ class ChannelwiseAffineCoupling(AbstractCoupling):
         out = self.block(off_)
         (shift, log_rescale) = out.split(C//2, dim=1)
         log_rescale = self.scale * torch.tanh(log_rescale) + self.scale_shift
-        
+
         log_diag_J = log_rescale     # See Eq(6) in real NVP
         # See Eq(7) and Eq(8) and Section 3.7 in real NVP
         if reverse:
@@ -511,11 +514,11 @@ class ChannelwiseAffineCoupling(AbstractCoupling):
                 log_diag_J = log_diag_J - 0.5 * torch.log(var + 1e-5)
         if self.mask_config:
             x = torch.cat((on, off), dim=1)
-            log_diag_J = torch.cat((log_diag_J, torch.zeros_like(log_diag_J)), 
+            log_diag_J = torch.cat((log_diag_J, torch.zeros_like(log_diag_J)),
                 dim=1)
         else:
             x = torch.cat((off, on), dim=1)
-            log_diag_J = torch.cat((torch.zeros_like(log_diag_J), log_diag_J), 
+            log_diag_J = torch.cat((torch.zeros_like(log_diag_J), log_diag_J),
                 dim=1)
         return x, log_diag_J
 
@@ -549,8 +552,8 @@ class ChannelwiseCoupling(nn.Module):
         """
         return self.coupling(x, reverse)
 
-class RealNVP(nn.Module):
-    def __init__(self, datainfo, prior, hps):
+class RealNVP(pl.LightningModule):
+    def __init__(self, datainfo, prior, hps, lr):
         """Initializes a RealNVP.
 
         Args:
@@ -560,20 +563,23 @@ class RealNVP(nn.Module):
         """
         super(RealNVP, self).__init__()
         self.datainfo = datainfo
+        self.image_size = datainfo.channel * datainfo.size ** 2
         self.prior = prior
         self.hps = hps
+        self.lr = lr
 
         chan = datainfo.channel
         size = datainfo.size
         dim = hps.base_dim
+
+        self.save_hyperparameters()
 
         if datainfo.name == 'cifar10':
             # architecture for CIFAR-10 (down to 16 x 16 x C)
             # SCALE 1: 3 x 32 x 32
             self.s1_ckbd = self.checkerboard_combo(chan, dim, size, hps)
             self.s1_chan = self.channelwise_combo(chan*4, dim, hps)
-#             self.order_matrix_1 = self.order_matrix(chan).cuda()
-            self.order_matrix_1 = self.order_matrix(chan)
+            self.register_buffer("order_matrix_1", self.order_matrix(chan))
             chan *= 2
             size //= 2
 
@@ -585,8 +591,7 @@ class RealNVP(nn.Module):
             # SCALE 1: 3 x 32(64) x 32(64)
             self.s1_ckbd = self.checkerboard_combo(chan, dim, size, hps)
             self.s1_chan = self.channelwise_combo(chan*4, dim*2, hps)
-#             self.order_matrix_1 = self.order_matrix(chan).cuda()
-            self.order_matrix_1 = self.order_matrix(chan)
+            self.register_buffer("order_matrix_1", self.order_matrix(chan))
             chan *= 2
             size //= 2
             dim *= 2
@@ -594,8 +599,7 @@ class RealNVP(nn.Module):
             # SCALE 2: 6 x 16(32) x 16(32)
             self.s2_ckbd = self.checkerboard_combo(chan, dim, size, hps)
             self.s2_chan = self.channelwise_combo(chan*4, dim*2, hps)
-#             self.order_matrix_2 = self.order_matrix(chan).cuda()
-            self.order_matrix_2 = self.order_matrix(chan)
+            self.register_buffer("order_matrix_2", self.order_matrix(chan))
             chan *= 2
             size //= 2
             dim *= 2
@@ -603,8 +607,7 @@ class RealNVP(nn.Module):
             # SCALE 3: 12 x 8(16) x 8(16)
             self.s3_ckbd = self.checkerboard_combo(chan, dim, size, hps)
             self.s3_chan = self.channelwise_combo(chan*4, dim*2, hps)
-#             self.order_matrix_3 = self.order_matrix(chan).cuda()
-            self.order_matrix_3 = self.order_matrix(chan)
+            self.register_buffer("order_matrix_3", self.order_matrix(chan))
             chan *= 2
             size //= 2
             dim *= 2
@@ -612,13 +615,12 @@ class RealNVP(nn.Module):
             if datainfo.name == 'imnet32':
                 # SCALE 4: 24 x 4 x 4
                 self.s4_ckbd = self.checkerboard_combo(chan, dim, size, hps, final=True)
-            
+
             elif datainfo.name in ['imnet64', 'celeba']:
                 # SCALE 4: 24 x 8 x 8
                 self.s4_ckbd = self.checkerboard_combo(chan, dim, size, hps)
                 self.s4_chan = self.channelwise_combo(chan*4, dim*2, hps)
-#                 self.order_matrix_4 = self.order_matrix(chan).cuda()
-                self.order_matrix_4 = self.order_matrix(chan)
+                self.register_buffer("order_matrix_4", self.order_matrix(chan))
                 chan *= 2
                 size //= 2
                 dim *= 2
@@ -646,10 +648,10 @@ class RealNVP(nn.Module):
                 CheckerboardCoupling(in_out_dim, mid_dim, size, 0., hps)])
         else:
             return nn.ModuleList([
-                CheckerboardCoupling(in_out_dim, mid_dim, size, 1., hps), 
+                CheckerboardCoupling(in_out_dim, mid_dim, size, 1., hps),
                 CheckerboardCoupling(in_out_dim, mid_dim, size, 0., hps),
                 CheckerboardCoupling(in_out_dim, mid_dim, size, 1., hps)])
-        
+
     def channelwise_combo(self, in_out_dim, mid_dim, hps):
         """Construct a combination of channelwise coupling layers.
 
@@ -778,7 +780,7 @@ class RealNVP(nn.Module):
                 # SCALE 5: 4 x 4
                 for i in reversed(range(len(self.s5_ckbd))):
                     x, _ = self.s5_ckbd[i](x, reverse=True)
-                
+
                 x = self.restore(x, x_off_4, self.order_matrix_4)
 
                 # SCALE 4: 8 x 8
@@ -905,7 +907,7 @@ class RealNVP(nn.Module):
             z = self.restore(z, z_off_2, self.order_matrix_2)
             log_diag_J = self.restore(log_diag_J, log_diag_J_off_3, self.order_matrix_3)
             log_diag_J = self.restore(log_diag_J, log_diag_J_off_2, self.order_matrix_2)
-        
+
         z = self.restore(z, z_off_1, self.order_matrix_1)
         log_diag_J = self.restore(log_diag_J, log_diag_J_off_1, self.order_matrix_1)
 
@@ -936,7 +938,7 @@ class RealNVP(nn.Module):
         """
         C = self.datainfo.channel
         H = W = self.datainfo.size
-        z = self.prior.sample((size, C, H, W))
+        z = self.prior.sample((size, C, H, W)).to(self.device)
         return self.g(z)
 
     def forward(self, x):
@@ -957,3 +959,51 @@ class RealNVP(nn.Module):
                 else:
                     weight_scale = weight_scale + torch.pow(param, 2).sum()
         return self.log_prob(x), weight_scale
+
+
+    def training_step(self, batch, batch_idx):
+        x = batch[0]
+        x, log_det = logit_transform(x)
+
+        log_ll, weight_scale = self(x)
+
+        log_ll = (log_ll + log_det).mean()
+        loss = -log_ll + self.hps.scale_reg * weight_scale
+
+        bits_per_dim = 8 - log_ll / (self.image_size * np.log(2.))
+
+        self.log('train_loss', loss)
+        self.log('train_log_ll', log_ll)
+        self.log('train_bits_per_dim', bits_per_dim, prog_bar=True)
+        return loss
+
+
+    def validation_step(self, batch, batch_idx):
+        x = batch[0]
+        x, log_det = logit_transform(x)
+
+        log_ll, weight_scale = self(x)
+
+        log_ll = (log_ll + log_det).mean()
+        loss = -log_ll + self.hps.scale_reg * weight_scale
+
+        bits_per_dim = 8 - log_ll / (self.image_size * np.log(2.))
+
+        self.log('val_loss', loss)
+        self.log('val_log_ll', log_ll)
+        self.log('val_bits_per_dim', bits_per_dim)
+        return loss
+
+
+    def validation_epoch_end(self, outputs):
+        samples = self.sample(64)
+        samples, _ = logit_transform(samples, reverse=True)
+        vutils.save_image(samples.detach().cpu(),
+                          f"{self.logger.save_dir}/{self.logger.name}/version_{self.logger.version}/"
+                          f"media/{self.logger.name}_{self.current_epoch}.png",
+                          nrow=8)
+
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer

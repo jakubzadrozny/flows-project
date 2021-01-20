@@ -34,9 +34,9 @@ def load(dataset):
     if dataset == 'cifar10':    # 3 x 32 x 32
         data_info = DataInfo(dataset, 3, 32)
         transform = transforms.Compose(
-            [transforms.RandomHorizontalFlip(p=0.5), 
+            [transforms.RandomHorizontalFlip(p=0.5),
              transforms.ToTensor()])
-        train_set = datasets.CIFAR10('../../data/CIFAR10', 
+        train_set = datasets.CIFAR10('../../data/CIFAR10',
             train=True, download=True, transform=transform)
         [train_split, val_split] = data.random_split(train_set, [46000, 4000])
 
@@ -45,11 +45,11 @@ def load(dataset):
         def CelebACrop(images):
             return transforms.functional.crop(images, 40, 15, 148, 148)
         transform = transforms.Compose(
-            [CelebACrop, 
-             transforms.Resize(64), 
-             transforms.RandomHorizontalFlip(p=0.5), 
+            [CelebACrop,
+             transforms.Resize(64),
+             transforms.RandomHorizontalFlip(p=0.5),
              transforms.ToTensor()])
-        train_set = datasets.ImageFolder('../../data/CelebA/train', 
+        train_set = datasets.ImageFolder('../../data/CelebA/train',
             transform=transform)
         [train_split, val_split] = data.random_split(train_set, [150000, 12770])
 
@@ -58,7 +58,7 @@ def load(dataset):
         transform = transforms.Compose(
             [transforms.RandomHorizontalFlip(p=0.5),
             transforms.ToTensor()])
-        train_set = datasets.ImageFolder('../../data/ImageNet32/train', 
+        train_set = datasets.ImageFolder('../../data/ImageNet32/train',
             transform=transform)
         [train_split, val_split] = data.random_split(train_set, [1250000, 31149])
 
@@ -67,7 +67,7 @@ def load(dataset):
         transform = transforms.Compose(
             [transforms.RandomHorizontalFlip(p=0.5),
             transforms.ToTensor()])
-        train_set = datasets.ImageFolder('../../data/ImageNet64/train', 
+        train_set = datasets.ImageFolder('../../data/ImageNet64/train',
             transform=transform)
         [train_split, val_split] = data.random_split(train_set, [1250000, 31149])
 
@@ -97,11 +97,11 @@ def logit_transform(x, constraint=0.9, reverse=False):
         return x, 0
     else:
         [B, C, H, W] = list(x.size())
-        
+
         # dequantization
-        noise = distributions.Uniform(0., 1.).sample((B, C, H, W))
+        noise = distributions.Uniform(0., 1.).sample((B, C, H, W)).to(x.device)
         x = (x * 255. + noise) / 256.
-        
+
         # restrict data
         x *= 2.             # [0, 2]
         x -= 1.             # [-1, 1]
