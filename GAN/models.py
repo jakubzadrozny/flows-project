@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torchvision import utils as vutils
 
 import pytorch_lightning as pl
 
@@ -102,6 +103,8 @@ class GAN(pl.LightningModule):
         self.discriminator = Discriminator(nc=nc, nz=nz, ndf=ndf)
         self.criterion = nn.BCELoss()
 
+        self.fixed_noise = torch.randn(64, self.nz, 1, 1)
+
 
     def forward(self, x):
         return self.generator(x)
@@ -162,3 +165,10 @@ class GAN(pl.LightningModule):
         loss = self.criterion(output, labels)
         self.log("gen_loss", loss, prog_bar=True)
         return loss
+
+    def training_epoch_end(self, outputs):
+        samples = self(self.fixed_noise.to(self.device))
+        vutils.save_image(samples.detach().cpu(),
+                          f"{self.logger.save_dir}/{self.logger.name}/version_{self.logger.version}/"
+                          f"media/{self.logger.name}_{self.current_epoch}_samples.png",
+                          nrow=8, normalize=True)
