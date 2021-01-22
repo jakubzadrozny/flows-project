@@ -10,7 +10,7 @@ This repository contains 4 model implementations:
 * Glow, based on [https://github.com/y0ast/Glow-PyTorch](https://github.com/y0ast/Glow-PyTorch)
 
 ## Training
-Training is done with the help of ![PyTorch Lightning](https://www.pytorchlightning.ai).
+Training is done with the help of [PyTorch Lightning](https://www.pytorchlightning.ai).
 
 First install requirements by `pip install -r requirements.txt`.
 
