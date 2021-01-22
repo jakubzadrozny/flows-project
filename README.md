@@ -26,6 +26,6 @@ They require PyTorch Lightning checkpoints with model weights to run. You can ge
 
 * VAE (40MB download): [https://drive.google.com/file/d/1i1QHCoGB1HH8IbGkrCuOXeDBDWEigSqs/view?usp=sharing](https://drive.google.com/file/d/1i1QHCoGB1HH8IbGkrCuOXeDBDWEigSqs/view?usp=sharing)
 * GAN (70MB download): [https://drive.google.com/file/d/1CI1YJOYvn2cSTdFUd3I9HfleeMXQnTLM/view?usp=sharing](https://drive.google.com/file/d/1CI1YJOYvn2cSTdFUd3I9HfleeMXQnTLM/view?usp=sharing)
-* RealNVP (1GB download): (coming soon)
+* RealNVP (1GB download): [https://drive.google.com/file/d/1J9FM66gwR8l8u76UYeaBxULM4dqIK5S-/view?usp=sharing](https://drive.google.com/file/d/1J9FM66gwR8l8u76UYeaBxULM4dqIK5S-/view?usp=sharing)
 
 You need to uncompress the files after download. You also need to provide paths to appropriate checkpoints in the notebook header.
