@@ -4,7 +4,6 @@ from itertools import islice
 import torch
 from torch.utils.data import DataLoader
 from torch.distributions.normal import Normal
-from torch.backends import cudnn
 from torchvision import transforms, datasets
 
 import pytorch_lightning as pl

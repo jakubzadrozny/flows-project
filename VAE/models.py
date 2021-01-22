@@ -19,8 +19,6 @@ class VAE(pl.LightningModule):
         if hidden_dims is None:
             hidden_dims = [32, 64, 128, 256, 512]
 
-        self.save_hyperparameters('in_channels', 'latent_dim', 'hidden_dims', 'lr', 'kl_weight')
-
         # Build Encoder
         for h_dim in hidden_dims:
             modules.append(
