@@ -22,3 +22,10 @@ Use `python runner.py -h` for help with the flags.
 
 ## Experiments
 Experiments are all placed in the `experiments.ipynb` notebook.
+They require PyTorch Lightning checkpoints with model weights to run. You can generate your own checkpoints by training a model (see the **Training** section) or download mine from:
+
+* VAE (40MB download): [https://drive.google.com/file/d/1i1QHCoGB1HH8IbGkrCuOXeDBDWEigSqs/view?usp=sharing] (https://drive.google.com/file/d/1i1QHCoGB1HH8IbGkrCuOXeDBDWEigSqs/view?usp=sharing)
+* GAN (70MB download): [https://drive.google.com/file/d/1CI1YJOYvn2cSTdFUd3I9HfleeMXQnTLM/view?usp=sharing] (https://drive.google.com/file/d/1CI1YJOYvn2cSTdFUd3I9HfleeMXQnTLM/view?usp=sharing)
+* RealNVP (1GB download): (coming soon)
+
+You need to uncompress the files after download. You also need to provide paths to appropriate checkpoints in the notebook header.
